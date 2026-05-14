@@ -44,6 +44,16 @@ export function useOrderNotifications() {
     if (!user || subscribedRef.current) return;
     subscribedRef.current = true;
 
+    const playSound = () => {
+      try {
+        const audio = new Audio("https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3");
+        audio.volume = 0.5;
+        audio.play().catch(e => console.warn("[Audio] Bloqueio de auto-play pelo navegador:", e));
+      } catch (err) {
+        console.error("[Audio] Erro ao reproduzir som:", err);
+      }
+    };
+
     const channel = supabase
       .channel('order-notifications')
       .on(
@@ -61,6 +71,7 @@ export function useOrderNotifications() {
           if (newStatus && newStatus !== oldStatus) {
             const msg = statusMessages[newStatus];
             if (msg) {
+              playSound();
               toast(msg.title, {
                 description: msg.description,
                 duration: 5000,

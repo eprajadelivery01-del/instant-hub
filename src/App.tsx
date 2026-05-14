@@ -30,6 +30,8 @@ import TermsOfService from "./pages/marketplace/TermsOfService";
 import Search from "./pages/marketplace/Search";
 import NotFound from "./pages/NotFound";
 
+import { SoundEnabler } from "@/components/shared/SoundEnabler";
+
 const App = () => {
   useEffect(() => {
     // Hide splash screen after React mounts
@@ -57,6 +59,7 @@ const App = () => {
               <TooltipProvider>
                 <Toaster />
                 <Sonner />
+                <SoundEnabler />
                 <BrowserRouter>
                   <ScrollToTop />
                   <Routes>
