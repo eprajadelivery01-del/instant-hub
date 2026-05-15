@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Send, Loader2, User as UserIcon } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface SupportChatProps {
   topic: string;
@@ -22,15 +23,15 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [newMessage, setNewMessage] = useState('');
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const QUICK_MESSAGES = [
-    { label: "Quero ser entregador! 🛵", text: "Olá! Gostaria de saber como faço para me cadastrar como entregador na plataforma." },
-    { label: "Problema no pedido 📦", text: "Olá! Estou com um problema em um dos meus pedidos recentes e gostaria de suporte." },
-    { label: "Dúvida sobre taxas 💰", text: "Olá! Tenho uma dúvida sobre as taxas de entrega ou cupons de desconto." },
-    { label: "Falar com suporte 🙋‍♂️", text: "Olá! Gostaria de falar com um atendente humano para tirar uma dúvida geral." }
+    { label: "Quero ser entregador 🏍️", text: "Olá! Gostaria de saber como faço para me cadastrar como entregador na plataforma." },
+    { label: "Problema no pedido 🍔", text: "Olá! Tive um problema com meu pedido recente e gostaria de suporte." },
+    { label: "Falar com suporte 👤", text: "Olá! Gostaria de falar com um atendente humano sobre uma dúvida geral." }
   ];
 
   useEffect(() => {
@@ -109,28 +110,47 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
 
   const handleSend = async (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault();
-    const msgText = customText || newMessage.trim();
+    const msgText = (customText || newMessage).trim();
     if (!msgText || !user || !conversationId || sending) return;
 
-    setSending(true);
+    const optimisticMsg: Message = {
+      id: Math.random().toString(36).substr(2, 9),
+      sender_id: user.id,
+      content: msgText,
+      created_at: new Date().toISOString()
+    };
+
     setNewMessage('');
+    setSending(true);
 
     try {
-      const { error } = await supabase.from('messages').insert({
+      // Adiciona localmente para feedback instantâneo
+      setMessages(prev => [...prev, optimisticMsg]);
+
+      const { data, error } = await supabase.from('messages').insert({
         conversation_id: conversationId,
         sender_id: user.id,
         content: msgText
-      });
+      }).select().single();
 
-      if (error) throw error;
+      if (error) {
+        // Remove otimista se falhar
+        setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
+        throw error;
+      }
 
-      // Atualiza o timestamp da conversa para ela subir na lista do admin
+      // Substitui a mensagem otimista pela real do banco (com ID correto)
+      if (data) {
+        setMessages(prev => prev.map(m => m.id === optimisticMsg.id ? data : m));
+      }
+
       await supabase.from('conversations').update({ 
         updated_at: new Date().toISOString() 
       }).eq('id', conversationId);
 
     } catch (err) {
       console.error("[SupportChat] Erro ao enviar:", err);
+      toast.error("Falha ao enviar mensagem");
     } finally {
       setSending(false);
     }
@@ -154,23 +174,19 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center py-6 px-4">
-            <div className="w-20 h-20 bg-primary/5 rounded-full flex items-center justify-center mb-6">
-              <UserIcon className="h-10 w-10 text-primary/30" />
-            </div>
-            <p className="text-sm font-black text-foreground mb-2">Inicie uma conversa</p>
-            <p className="text-xs text-muted-foreground mb-8 max-w-[240px]">
-              Escolha uma opção abaixo ou escreva sua dúvida para começarmos o atendimento.
+          <div className="flex flex-col items-center justify-center h-full text-center px-4">
+            <p className="text-[10px] font-bold text-muted-foreground/50 mb-4 uppercase tracking-widest">
+              Sugestões de início
             </p>
-            
             <div className="grid grid-cols-1 gap-2 w-full max-w-[280px]">
-              {QUICK_MESSAGES.map((msg, idx) => (
+              {QUICK_MESSAGES.map((m, idx) => (
                 <button
                   key={idx}
-                  onClick={() => handleSend(undefined, msg.text)}
-                  className="px-4 py-3 rounded-xl bg-card border border-border/50 text-[11px] font-bold text-foreground text-left hover:border-primary hover:bg-primary/5 active:scale-95 transition-all shadow-sm"
+                  onClick={() => handleSend(undefined, m.text)}
+                  disabled={!conversationId || sending}
+                  className="px-4 py-3 rounded-2xl bg-card border border-border/50 text-[11px] font-bold text-foreground text-left hover:border-primary hover:bg-primary/5 active:scale-95 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {msg.label}
+                  {m.label}
                 </button>
               ))}
             </div>
@@ -199,7 +215,7 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
           placeholder="Escreva sua mensagem..."
           className="flex-1 rounded-full bg-background border-border/40 h-12 px-5"
         />
-        <Button disabled={!newMessage.trim() || !conversationId || sending} type="submit" size="icon" className="rounded-full h-12 w-12 shrink-0 shadow-lg active:scale-95 transition-all">
+        <Button disabled={(!newMessage.trim() && !sending) || !conversationId || sending} type="submit" size="icon" className="rounded-full h-12 w-12 shrink-0 shadow-lg active:scale-95 transition-all">
           {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
         </Button>
       </form>
