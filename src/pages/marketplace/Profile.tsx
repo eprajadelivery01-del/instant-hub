@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useAddress } from '@/contexts/AddressContext';
 import MarketplaceLayout from '@/components/marketplace/MarketplaceLayout';
 import { toast } from 'sonner';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -36,6 +37,7 @@ const STATUS_MAP: Record<string, { label: string; color: string; icon: React.Ele
 export default function Profile() {
   const { user, profile, signOut, refreshProfile } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { selectedAddress } = useAddress();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -59,21 +61,36 @@ export default function Profile() {
   useEffect(() => {
     if (!user) return;
     fetchOrders();
+    fetchCoupons(false);
   }, [user]);
 
-  const fetchCoupons = async () => {
-    if (coupons.length > 0) { setShowCoupons(true); return; }
-    setLoadingCoupons(true);
+  const fetchCoupons = async (show = true) => {
+    if (show && coupons.length > 0) { setShowCoupons(true); return; }
+    if (show) setLoadingCoupons(true);
     try {
       const { data } = await supabase
         .from('coupons')
-        .select('*')
+        .select('*, companies(name, logo_url, region_id)')
         .eq('active', true)
         .order('created_at', { ascending: false });
-      const valid = (data || []).filter(c => !c.expires_at || new Date(c.expires_at) > new Date());
+        
+      let valid = (data || []).filter(c => !c.expires_at || new Date(c.expires_at) > new Date());
+      
+      if (selectedAddress?.region_id) {
+        valid = valid.filter(c => 
+          !c.company_id || 
+          c.companies?.region_id === selectedAddress.region_id
+        );
+      }
+
       setCoupons(valid);
     } catch { /* silent */ }
-    finally { setLoadingCoupons(false); setShowCoupons(true); }
+    finally { 
+      if (show) {
+        setLoadingCoupons(false); 
+        setShowCoupons(true); 
+      }
+    }
   };
 
   const handleCopyCode = (code: string) => {
@@ -104,14 +121,34 @@ export default function Profile() {
     setUploading(true);
     try {
       const fileExt = file.name.split('.').pop();
-      const filePath = `${user.id}-avatar-${Date.now()}.${fileExt}`;
-      const { error } = await supabase.storage.from('avatars').upload(filePath, file, { upsert: true });
-      if (error) throw error;
-      const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(filePath);
-      await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
+      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
+      
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(fileName, file, { 
+          cacheControl: '3600',
+          upsert: true 
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(fileName);
+
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
+
+      if (updateError) throw updateError;
+
       await refreshProfile();
-      toast.success('Foto atualizada!');
-    } catch { toast.error('Falha no upload'); }
+      toast.success('Foto atualizada com sucesso!');
+    } catch (err: any) { 
+      console.error('Photo upload error:', err);
+      toast.error('Falha no upload: ' + (err.message || 'Erro de permissão ou conexão')); 
+    }
     finally { setUploading(false); }
   };
 
@@ -120,7 +157,11 @@ export default function Profile() {
     setSaving(true);
     try {
       await supabase.from('profiles').update({ full_name: fullName, phone }).eq('id', user.id);
+      
+      // Delay to ensure DB replication/trigger finish before refetching
+      await new Promise(resolve => setTimeout(resolve, 500));
       await refreshProfile();
+      
       toast.success('Perfil atualizado!');
       setEditing(false);
     } catch { toast.error('Erro ao salvar'); }
@@ -134,378 +175,375 @@ export default function Profile() {
 
   return (
     <MarketplaceLayout>
-      <div className="min-h-screen pb-32">
-
-        {/* ── AVATAR + NOME ── */}
-        <div className="px-5 pt-10 pb-6 flex flex-col items-center text-center">
-          <div className="relative mb-4">
+      <div className="min-h-screen pb-40 bg-background/50">
+        
+        {/* Profile Header (Social Style) */}
+        <div className="relative pt-8 px-6 flex flex-col items-center text-center">
+          <div className="relative group mb-4">
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="w-24 h-24 rounded-full bg-muted border-4 border-background shadow-xl overflow-hidden hover:scale-105 transition-transform"
+              className="w-32 h-32 rounded-[2.5rem] bg-background p-1 shadow-2xl overflow-hidden active:scale-95 transition-all relative z-10"
             >
-              {profile?.avatar_url ? (
-                <img src={profile.avatar_url} className="w-full h-full object-cover" alt="Foto" />
-              ) : (
-                <div className="w-full h-full gradient-primary flex items-center justify-center">
-                  <span className="text-3xl font-black text-white">{initial}</span>
+              <div className="w-full h-full rounded-[2.2rem] overflow-hidden bg-muted">
+                {profile?.avatar_url ? (
+                  <img src={profile.avatar_url} className="w-full h-full object-cover" alt="Foto de perfil" />
+                ) : (
+                  <div className="w-full h-full gradient-primary flex items-center justify-center">
+                    <span className="text-5xl font-black text-white">{initial}</span>
+                  </div>
+                )}
+              </div>
+              {uploading && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 rounded-[2.5rem]">
+                  <Loader2 className="h-8 w-8 animate-spin text-white" />
                 </div>
               )}
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-foreground border-2 border-background flex items-center justify-center shadow-md"
+              className="absolute bottom-2 right-2 w-10 h-10 rounded-2xl bg-foreground text-background border-4 border-background flex items-center justify-center shadow-lg hover:scale-110 transition-transform z-30"
             >
-              {uploading
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin text-background" />
-                : <Camera className="h-3.5 w-3.5 text-background" />
-              }
+              <Camera className="h-5 w-5" />
             </button>
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
           </div>
 
-          <h1 className="text-xl font-black text-foreground">{displayName}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{user.email}</p>
-          {profile?.phone && (
-            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              <Phone className="h-3 w-3" /> {profile.phone}
-            </p>
-          )}
+          <h1 className="text-3xl font-black text-foreground tracking-tight mb-1">{displayName}</h1>
+          <p className="text-sm font-medium text-muted-foreground/60 mb-6">{user.email}</p>
 
-          <button
-            onClick={() => setEditing(true)}
-            className="mt-4 px-6 py-2 rounded-xl border border-border text-sm font-bold text-foreground hover:bg-muted transition-all"
-          >
-            Editar Dados
-          </button>
+          <div className="flex gap-3 w-full max-w-sm">
+            <button
+              onClick={() => setEditing(true)}
+              className="flex-1 h-12 rounded-2xl bg-foreground text-background text-sm font-black hover:opacity-90 active:scale-95 transition-all shadow-lg"
+            >
+              Editar Perfil
+            </button>
+            <button
+              onClick={() => navigate('/marketplace/addresses')}
+              className="w-12 h-12 rounded-2xl bg-card border border-border flex items-center justify-center text-foreground hover:bg-muted active:scale-95 transition-all shadow-sm"
+            >
+              <MapPin className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
-        <div className="px-5 space-y-4">
-
-          {/* ── CLUBE ── */}
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary to-orange-600 p-5 shadow-lg shadow-primary/30">
-            <div className="relative z-10 flex items-center justify-between gap-4">
-              <div>
-                <p className="text-[9px] font-black text-white/70 uppercase tracking-widest mb-1">Clube É Pra Já</p>
-                <p className="text-sm font-black text-white leading-snug">Economize com cupons<br/>no seu lanche favorito</p>
-              </div>
-              <button
-                onClick={fetchCoupons}
-                disabled={loadingCoupons}
-                className="shrink-0 h-9 px-4 rounded-xl bg-white text-primary text-xs font-black hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-70"
-              >
-                {loadingCoupons ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ticket className="h-3.5 w-3.5" />}
-                Ver benefícios
-              </button>
-            </div>
-            <span className="absolute -right-3 -bottom-5 text-[100px] opacity-10 select-none leading-none">🍔</span>
-          </div>
-
-          {/* ── HISTÓRICO DE PEDIDOS ── */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-black uppercase tracking-widest text-foreground">Histórico de Pedidos</h2>
-              {orders.length > 0 && (
-                <button
-                  onClick={() => navigate('/marketplace/orders')}
-                  className="text-[11px] font-bold text-primary"
-                >
-                  Ver todos
-                </button>
-              )}
-            </div>
-
-            <div className="bg-card border border-border rounded-2xl overflow-hidden">
-              {loadingOrders ? (
-                <div className="py-10 flex items-center justify-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/40" />
-                </div>
-              ) : orders.length === 0 ? (
-                <div className="py-12 flex flex-col items-center gap-2 text-muted-foreground/40">
-                  <Package className="h-10 w-10" />
-                  <p className="text-[10px] font-black uppercase tracking-widest">Nenhum pedido ainda</p>
-                  <button
-                    onClick={() => navigate('/marketplace')}
-                    className="mt-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-black"
-                  >
-                    Explorar lojas
-                  </button>
-                </div>
-              ) : (
-                <div className="divide-y divide-border/50">
-                  {orders.map((order) => {
-                    const s = STATUS_MAP[order.status] || STATUS_MAP.pending;
-                    const StatusIcon = s.icon;
-
-                    let logoSrc = '';
-                    if (order.companies?.logo_url) {
-                      try {
-                        const parsed = JSON.parse(order.companies.logo_url);
-                        logoSrc = parsed.logo || parsed.cover || '';
-                      } catch {
-                        logoSrc = order.companies.logo_url;
-                      }
-                    }
-
-                    return (
-                      <button
-                        key={order.id}
-                        onClick={() => navigate(`/marketplace/orders/${order.id}`)}
-                        className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/30 active:bg-muted/50 transition-colors"
-                      >
-                        {/* Store logo or icon */}
-                        <div className="w-11 h-11 rounded-xl bg-muted overflow-hidden shrink-0 flex items-center justify-center border border-border/50">
-                          {logoSrc ? (
-                            <img src={logoSrc} className="w-full h-full object-cover" alt="" />
-                          ) : (
-                            <Package className="h-5 w-5 text-muted-foreground/40" />
-                          )}
-                        </div>
-
-                        {/* Info */}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-foreground truncate">
-                            {order.companies?.name || 'Pedido'}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {order.created_at
-                              ? format(new Date(order.created_at), "dd 'de' MMM, HH:mm", { locale: ptBR })
-                              : '—'}
-                          </p>
-                        </div>
-
-                        {/* Right: status + value */}
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <span className="text-sm font-black text-foreground">
-                            R$ {Number(order.total || 0).toFixed(2).replace('.', ',')}
-                          </span>
-                          <span className={cn('flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full', s.color)}>
-                            <StatusIcon className="h-3 w-3" />
-                            {s.label}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── MENU ── */}
-          <div className="bg-card border border-border rounded-2xl overflow-hidden">
+        {/* User Stats Bar */}
+        <div className="px-6 mt-10">
+          <div className="bg-card/40 backdrop-blur-md border border-border/50 rounded-[2.5rem] p-2 flex items-center justify-between shadow-sm">
             {[
-              { icon: MapPin,    label: 'Endereços', subtitle: 'Gerenciar locais salvos',      onClick: () => navigate('/marketplace/addresses'), chevron: true },
-              { icon: Wallet,    label: 'Carteira',  subtitle: 'Saldo e recargas',              onClick: () => toast('Em breve!') },
-              { icon: theme === 'dark' ? Moon : Sun, label: 'Aparência', subtitle: theme === 'dark' ? 'Modo escuro ativo' : 'Modo claro ativo', onClick: () => toggleTheme() },
-              { icon: HelpCircle, label: 'Ajuda',   subtitle: 'Suporte e dúvidas',             onClick: () => setSupportType('support') },
-              { icon: FileText,  label: 'Termos de Uso', subtitle: 'Regras da plataforma',    onClick: () => navigate('/marketplace/terms'), chevron: true },
-              { icon: ShieldCheck, label: 'Privacidade', subtitle: 'Seus dados protegidos',   onClick: () => navigate('/marketplace/privacy'), chevron: true },
-            ].map((item, i, arr) => (
-              <button
-                key={item.label}
-                onClick={item.onClick}
-                className={cn('w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-muted/40 transition-colors', i < arr.length - 1 && 'border-b border-border/50')}
+              { label: 'Pedidos', value: orders.length, color: 'text-foreground' },
+              { label: 'Cupons',  value: coupons.length, color: 'text-primary', onClick: () => fetchCoupons(true) },
+              { label: 'Região',  value: 'MT', color: 'text-foreground' }
+            ].map((stat, i) => (
+              <button 
+                key={stat.label}
+                onClick={stat.onClick}
+                disabled={!stat.onClick}
+                className={cn(
+                  "flex-1 flex flex-col items-center py-3",
+                  i < 2 && "border-r border-border/30"
+                )}
               >
-                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
-                  <item.icon className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-bold text-foreground">{item.label}</p>
-                  <p className="text-xs text-muted-foreground">{item.subtitle}</p>
-                </div>
-                {item.chevron && <ChevronRight className="h-4 w-4 text-muted-foreground/40" />}
+                <span className={cn("text-xl font-black leading-none", stat.color)}>{stat.value}</span>
+                <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 mt-1">{stat.label}</span>
               </button>
             ))}
           </div>
+        </div>
 
-          {/* ── ENTREGADOR ── */}
-          <button
-            onClick={() => setSupportType('driver_application')}
-            className="w-full flex items-center gap-4 p-5 rounded-2xl bg-foreground text-background hover:opacity-90 transition-all"
-          >
-            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
-              <Bike className="h-5 w-5" />
-            </div>
-            <div className="text-left">
-              <p className="font-black text-sm">Seja um Entregador</p>
-              <p className="text-[11px] opacity-60 font-medium">Trabalhe conosco e ganhe mais</p>
-            </div>
-            <ChevronRight className="ml-auto h-4 w-4 opacity-40" />
-          </button>
-
-          {/* ── SAIR ── */}
-          <button
-            onClick={() => signOut()}
-            className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl border border-border text-muted-foreground font-bold text-sm hover:text-destructive hover:border-destructive/30 hover:bg-destructive/5 transition-all"
-          >
-            <LogOut className="h-4 w-4" /> Sair da conta
-          </button>
-
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <button className="w-full text-xs text-muted-foreground/40 hover:text-destructive transition-colors py-2 pb-4">
-                Excluir minha conta
+        {/* Main Content Area */}
+        <div className="px-6 mt-8 space-y-8">
+          
+          {/* Clube Promo Card */}
+          <div className="relative overflow-hidden rounded-[2.5rem] bg-gradient-to-br from-primary to-orange-600 p-8 shadow-xl shadow-primary/10 group">
+            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10" />
+            <div className="relative z-10 flex flex-col gap-5">
+              <div className="flex items-center gap-2">
+                <div className="h-6 w-6 rounded-lg bg-white/20 flex items-center justify-center">
+                  <Ticket className="h-4 w-4 text-white" />
+                </div>
+                <p className="text-[10px] font-black text-white/80 uppercase tracking-[0.2em]">Clube VIP É Pra Já</p>
+              </div>
+              <div>
+                <p className="text-xl font-black text-white leading-tight">Você tem cupons<br/>exclusivos disponíveis</p>
+                <p className="text-xs text-white/60 mt-2 font-medium">Economize agora no seu próximo pedido</p>
+              </div>
+              <button
+                onClick={() => fetchCoupons(true)}
+                disabled={loadingCoupons}
+                className="w-full h-12 rounded-2xl bg-white text-primary text-sm font-black hover:scale-[1.02] active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2"
+              >
+                {loadingCoupons ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Ver Meus Cupons'}
               </button>
-            </AlertDialogTrigger>
-            <AlertDialogContent className="rounded-2xl">
-              <AlertDialogHeader>
-                <AlertDialogTitle>Excluir conta?</AlertDialogTitle>
-                <AlertDialogDescription>Esta ação é permanente e não pode ser desfeita.</AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter className="flex-col gap-2">
-                <AlertDialogAction
-                  onClick={async () => { await supabase.from('profiles').delete().eq('id', user.id); await signOut(); navigate('/marketplace/login'); }}
-                  className="bg-destructive hover:bg-destructive/90 h-11 rounded-xl"
-                >
-                  Sim, excluir conta
-                </AlertDialogAction>
-                <AlertDialogCancel className="h-11 rounded-xl">Cancelar</AlertDialogCancel>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+            </div>
+            <span className="absolute -right-6 -bottom-8 text-[140px] opacity-20 group-hover:scale-110 transition-transform duration-700 leading-none grayscale brightness-200">🔥</span>
+          </div>
+
+          {/* Settings Groups */}
+          <div className="space-y-10">
+            {/* Group: Minha Conta */}
+            <div>
+              <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground/40 mb-4 ml-4">Minha Conta</h2>
+              <div className="bg-card border border-border/50 rounded-[2.5rem] overflow-hidden shadow-sm">
+                {[
+                  { icon: MapPin,    label: 'Endereços', subtitle: 'Gerenciar locais de entrega', onClick: () => navigate('/marketplace/addresses') },
+                  { icon: Wallet,    label: 'Carteira',  subtitle: 'Saldo e transações',           onClick: () => toast('Em breve!') },
+                  { icon: theme === 'dark' ? Moon : Sun, label: 'Aparência', subtitle: theme === 'dark' ? 'Modo Escuro Ativo' : 'Modo Claro Ativo', onClick: () => toggleTheme() },
+                ].map((item, i, arr) => (
+                  <button
+                    key={item.label}
+                    onClick={item.onClick}
+                    className={cn(
+                      'w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-muted/40 transition-colors',
+                      i < arr.length - 1 && 'border-b border-border/40'
+                    )}
+                  >
+                    <div className="w-11 h-11 rounded-2xl bg-secondary flex items-center justify-center shrink-0">
+                      <item.icon className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-black text-foreground">{item.label}</p>
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-wider mt-0.5">{item.subtitle}</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/20" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Group: Suporte & Legal */}
+            <div>
+              <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground/40 mb-4 ml-4">Ajuda & Legal</h2>
+              <div className="bg-card border border-border/50 rounded-[2.5rem] overflow-hidden shadow-sm">
+                {[
+                  { icon: HelpCircle, label: 'Central de Ajuda', subtitle: 'Suporte e dúvidas',    onClick: () => setSupportType('support') },
+                  { icon: FileText,   label: 'Termos de Uso',   subtitle: 'Regras da plataforma',  onClick: () => navigate('/marketplace/terms') },
+                  { icon: ShieldCheck, label: 'Privacidade',    subtitle: 'Segurança dos dados',   onClick: () => navigate('/marketplace/privacy') },
+                ].map((item, i, arr) => (
+                  <button
+                    key={item.label}
+                    onClick={item.onClick}
+                    className={cn(
+                      'w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-muted/40 transition-colors',
+                      i < arr.length - 1 && 'border-b border-border/40'
+                    )}
+                  >
+                    <div className="w-11 h-11 rounded-2xl bg-secondary flex items-center justify-center shrink-0">
+                      <item.icon className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-black text-foreground">{item.label}</p>
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-wider mt-0.5">{item.subtitle}</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/20" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Partner CTA */}
+            <button
+              onClick={() => setSupportType('driver_application')}
+              className="w-full relative overflow-hidden flex items-center gap-5 p-7 rounded-[2.8rem] bg-foreground text-background hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xl shadow-foreground/10"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-transparent pointer-events-none" />
+              <div className="w-14 h-14 rounded-[1.4rem] bg-background/10 backdrop-blur-sm flex items-center justify-center shrink-0 border border-background/20">
+                <Bike className="h-7 w-7 text-background" />
+              </div>
+              <div className="text-left relative z-10 flex-1">
+                <p className="font-black text-lg leading-tight">Seja um Entregador</p>
+                <p className="text-[10px] opacity-60 font-black uppercase tracking-[0.2em] mt-1.5">Ganhos extras e liberdade</p>
+              </div>
+              <div className="ml-auto w-10 h-10 rounded-full bg-background/10 flex items-center justify-center">
+                <ChevronRight className="h-5 w-5 text-background opacity-60" />
+              </div>
+            </button>
+
+            {/* Danger Zone */}
+            <div className="space-y-3">
+              <button
+                onClick={() => signOut()}
+                className="w-full flex items-center justify-center gap-2 py-4.5 rounded-2xl border border-border text-muted-foreground font-black text-sm hover:text-destructive hover:border-destructive/30 hover:bg-destructive/5 transition-all"
+              >
+                <LogOut className="h-4 w-4" /> Sair da conta
+              </button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <button className="w-full text-xs text-muted-foreground/30 hover:text-destructive transition-colors py-2 font-bold uppercase tracking-widest">
+                    Excluir minha conta
+                  </button>
+                </AlertDialogTrigger>
+                <AlertDialogContent className="rounded-3xl border-none p-8">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="text-xl font-black">Excluir sua conta?</AlertDialogTitle>
+                    <AlertDialogDescription className="text-sm font-medium leading-relaxed">
+                      Esta ação é permanente e todos os seus dados de pedidos e cupons serão perdidos para sempre.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="flex-col gap-3 mt-6">
+                    <AlertDialogAction
+                      onClick={async () => { await supabase.from('profiles').delete().eq('id', user.id); await signOut(); navigate('/marketplace/login'); }}
+                      className="bg-destructive hover:bg-destructive/90 h-14 rounded-2xl text-white font-black"
+                    >
+                      Sim, excluir definitivamente
+                    </AlertDialogAction>
+                    <AlertDialogCancel className="h-14 rounded-2xl border-none bg-muted text-foreground font-black">
+                      Manter minha conta
+                    </AlertDialogCancel>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
+
+          {/* Footer Branding */}
+          <div className="py-12 flex flex-col items-center gap-1 opacity-20">
+            <p className="text-[11px] font-black tracking-[0.8em] text-foreground ml-3">BONASOFT</p>
+            <p className="text-[8px] font-bold uppercase tracking-widest">Tecnologia para Delivery</p>
+          </div>
         </div>
       </div>
 
-      {/* ── EDITAR SHEET ── */}
+      {/* Edit Profile Sheet */}
       <Sheet open={editing} onOpenChange={setEditing}>
-        <SheetContent side="bottom" hideClose className="h-[70vh] rounded-t-3xl border-none p-0">
+        <SheetContent side="bottom" hideClose className="h-[75vh] rounded-t-[3rem] border-none p-0 shadow-2xl">
           <div className="h-full flex flex-col bg-background">
-            <div className="p-6 pb-4 flex items-center justify-between border-b border-border">
+            <div className="p-8 pb-6 flex items-center justify-between border-b border-border/50">
               <div>
-                <p className="text-[10px] text-primary font-black uppercase tracking-widest">Meu Perfil</p>
-                <h3 className="text-xl font-black text-foreground">Editar Dados</h3>
+                <p className="text-[10px] text-primary font-black uppercase tracking-widest mb-1">Configurações</p>
+                <h3 className="text-2xl font-black text-foreground tracking-tight">Editar Meus Dados</h3>
               </div>
-              <button onClick={() => setEditing(false)} className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                <X className="h-5 w-5 text-muted-foreground" />
+              <button onClick={() => setEditing(false)} className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                <X className="h-6 w-6 text-muted-foreground" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <div className="flex-1 overflow-y-auto p-8 space-y-6">
               {[
-                { label: 'Nome completo', value: fullName, onChange: setFullName, placeholder: 'Seu nome' },
+                { label: 'Nome completo', value: fullName, onChange: setFullName, placeholder: 'Como quer ser chamado?' },
                 { label: 'WhatsApp', value: phone, onChange: setPhone, placeholder: '(00) 00000-0000' },
               ].map(f => (
                 <div key={f.label} className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">{f.label}</label>
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-2">{f.label}</label>
                   <input
                     value={f.value}
                     onChange={e => f.onChange(e.target.value)}
                     placeholder={f.placeholder}
-                    className="w-full px-4 py-3.5 rounded-2xl border border-border bg-muted/30 font-medium outline-none focus:border-primary focus:ring-4 focus:ring-primary/5 transition-all"
+                    className="w-full px-6 py-4.5 rounded-2xl border border-border bg-muted/30 font-bold text-foreground outline-none focus:border-primary focus:ring-4 focus:ring-primary/5 transition-all"
                   />
                 </div>
               ))}
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="w-full py-4 rounded-2xl gradient-primary text-primary-foreground font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-primary/20 disabled:opacity-50"
-              >
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                {saving ? 'Salvando...' : 'Salvar Alterações'}
-              </button>
+              <div className="pt-4">
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="w-full h-14 rounded-2xl gradient-primary text-white font-black text-sm flex items-center justify-center gap-3 shadow-xl shadow-primary/20 disabled:opacity-50 active:scale-95 transition-all"
+                >
+                  {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
+                  {saving ? 'Salvando Alterações...' : 'Salvar Alterações'}
+                </button>
+              </div>
             </div>
           </div>
         </SheetContent>
       </Sheet>
 
-      {/* ── SUPORTE SHEET ── */}
+      {/* Support Chat Sheet */}
       <Sheet open={supportType !== null} onOpenChange={open => !open && setSupportType(null)}>
-        <SheetContent side="bottom" hideClose className="h-[80vh] rounded-t-3xl border-none p-0 overflow-hidden">
+        <SheetContent side="bottom" hideClose className="h-[85vh] rounded-t-[3rem] border-none p-0 overflow-hidden shadow-2xl">
           <div className="flex flex-col h-full bg-background relative">
-            <div className="absolute right-4 top-4 z-10">
-              <button onClick={() => setSupportType(null)} className="w-9 h-9 rounded-full bg-muted flex items-center justify-center border">
-                <X className="h-4 w-4 text-muted-foreground" />
+            <div className="absolute right-6 top-6 z-50">
+              <button onClick={() => setSupportType(null)} className="w-10 h-10 rounded-full bg-background/80 backdrop-blur-md flex items-center justify-center border shadow-sm">
+                <X className="h-5 w-5 text-muted-foreground" />
               </button>
             </div>
             {supportType && (
               <SupportChat
-                title={supportType === 'support' ? 'Ajuda e Suporte' : 'Seja um Entregador'}
+                title={supportType === 'support' ? 'Central de Ajuda' : 'Cadastro de Entregador'}
                 topic={supportType}
               />
             )}
           </div>
         </SheetContent>
       </Sheet>
-      {/* ── CUPONS SHEET ── */}
+
+      {/* Coupons List Sheet */}
       <Sheet open={showCoupons} onOpenChange={setShowCoupons}>
-        <SheetContent side="bottom" hideClose className="h-[85vh] rounded-t-3xl border-none p-0">
+        <SheetContent side="bottom" hideClose className="h-[85vh] rounded-t-[3rem] border-none p-0 shadow-2xl">
           <div className="h-full flex flex-col bg-background">
-            {/* Header */}
-            <div className="px-6 pt-6 pb-4 flex items-center justify-between border-b border-border shrink-0">
+            <div className="px-8 pt-8 pb-6 flex items-center justify-between border-b border-border shrink-0">
               <div>
-                <p className="text-[10px] text-primary font-black uppercase tracking-widest">Clube É Pra Já</p>
-                <h3 className="text-xl font-black text-foreground">Cupons Disponíveis</h3>
+                <p className="text-[10px] text-primary font-black uppercase tracking-widest mb-1">Clube É Pra Já</p>
+                <h3 className="text-2xl font-black text-foreground tracking-tight">Cupons Disponíveis</h3>
               </div>
-              <button onClick={() => setShowCoupons(false)} className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                <X className="h-5 w-5 text-muted-foreground" />
+              <button onClick={() => setShowCoupons(false)} className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                <X className="h-6 w-6 text-muted-foreground" />
               </button>
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {loadingCoupons ? (
-                <div className="py-16 flex items-center justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/40" />
+                <div className="py-20 flex items-center justify-center">
+                  <Loader2 className="h-10 w-10 animate-spin text-primary" />
                 </div>
               ) : coupons.length === 0 ? (
-                <div className="py-16 flex flex-col items-center gap-3 text-center text-muted-foreground/40">
-                  <Ticket className="h-12 w-12" />
-                  <p className="font-black text-sm uppercase tracking-widest">Nenhum cupom ativo</p>
-                  <p className="text-xs text-muted-foreground">Aguarde novas promoções!</p>
+                <div className="py-24 flex flex-col items-center gap-4 text-center">
+                  <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center opacity-20">
+                    <Ticket className="h-10 w-10 text-foreground" />
+                  </div>
+                  <p className="font-black text-lg text-foreground/40 tracking-tight">Nenhum cupom ativo no momento</p>
+                  <p className="text-xs text-muted-foreground/60 max-w-[200px]">Fique de olho em nossas redes para novas promoções!</p>
                 </div>
               ) : (
                 coupons.map((coupon) => (
-                  <div key={coupon.id} className="relative overflow-hidden rounded-2xl bg-card border border-border shadow-sm">
-                    <div className="p-4 flex gap-4 items-center">
-                      {/* Icon */}
-                      <div className="w-14 h-14 shrink-0 rounded-2xl bg-primary/10 flex flex-col items-center justify-center gap-0.5">
-                        <Ticket className="h-5 w-5 text-primary" />
-                        <span className="text-[7px] font-black text-primary uppercase tracking-widest">É PRA JÁ</span>
+                  <div key={coupon.id} className="relative overflow-hidden rounded-[2rem] bg-card border border-border shadow-sm group">
+                    <div className="p-5 flex gap-5 items-center">
+                      <div className="w-16 h-16 shrink-0 rounded-2xl bg-primary/10 flex flex-col items-center justify-center gap-0.5 border border-primary/5">
+                        <Ticket className="h-6 w-6 text-primary" />
+                        <span className="text-[8px] font-black text-primary uppercase tracking-widest">VIP</span>
                       </div>
 
-                      {/* Info */}
                       <div className="flex-1 min-w-0">
-                        <p className="text-base font-black text-foreground leading-tight">
+                        <p className="text-xl font-black text-foreground leading-tight tracking-tight">
                           {coupon.discount_type === 'percentage'
-                            ? `${coupon.discount_value}% de Desconto`
+                            ? `${coupon.discount_value}% OFF`
                             : `R$ ${Number(coupon.discount_value).toFixed(2).replace('.', ',')} OFF`}
                         </p>
-                        {coupon.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{coupon.description}</p>
-                        )}
-                        <div className="flex items-center gap-3 mt-2 flex-wrap">
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted text-[10px] font-bold uppercase tracking-wider">
-                            <span className="text-muted-foreground">Código:</span>
-                            <span className="text-primary">{coupon.code}</span>
+                        <p className="text-[11px] font-bold text-primary uppercase tracking-wider mt-1">
+                          {coupon.companies?.name || 'Válido em toda a plataforma'}
+                        </p>
+                        <div className="flex items-center gap-4 mt-3 flex-wrap">
+                          <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-muted text-[10px] font-black uppercase tracking-widest text-primary border border-primary/10">
+                            {coupon.code}
                           </span>
                           {coupon.expires_at && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-muted-foreground uppercase">
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground/60 uppercase">
                               <Clock className="h-3 w-3" />
-                              Expira: {new Date(coupon.expires_at).toLocaleDateString('pt-BR')}
+                              Expira {new Date(coupon.expires_at).toLocaleDateString('pt-BR')}
                             </span>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Footer */}
-                    <div className="bg-muted/40 border-t border-dashed border-border px-4 py-2.5 flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-muted-foreground">
+                    <div className="bg-muted/30 border-t border-dashed border-border px-6 py-3 flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-wider">
                         {coupon.min_order_value > 0
-                          ? `Pedidos acima de R$ ${Number(coupon.min_order_value).toFixed(2).replace('.', ',')}`
-                          : 'Válido para qualquer valor'}
+                          ? `Pedido mínimo R$ ${Number(coupon.min_order_value).toFixed(2).replace('.', ',')}`
+                          : 'Sem valor mínimo'}
                       </span>
                       <button
                         onClick={() => handleCopyCode(coupon.code)}
-                        className="flex items-center gap-1 text-xs font-black text-primary active:scale-95 transition-transform uppercase tracking-widest"
+                        className="flex items-center gap-1.5 text-xs font-black text-primary hover:scale-105 active:scale-95 transition-all uppercase tracking-widest"
                       >
-                        <Copy className="h-3 w-3" /> Copiar
+                        <Copy className="h-4 w-4" /> Copiar Código
                       </button>
                     </div>
 
                     {/* Ticket cutouts */}
-                    <div className="absolute top-[74px] -left-2.5 h-5 w-5 rounded-full bg-background border border-border/50" />
-                    <div className="absolute top-[74px] -right-2.5 h-5 w-5 rounded-full bg-background border border-border/50" />
+                    <div className="absolute top-[88px] -left-3 h-6 w-6 rounded-full bg-background border border-border/50" />
+                    <div className="absolute top-[88px] -right-3 h-6 w-6 rounded-full bg-background border border-border/50" />
                   </div>
                 ))
               )}

@@ -22,9 +22,16 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newMessage, setNewMessage] = useState('');
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const QUICK_MESSAGES = [
+    { label: "Quero ser entregador! 🛵", text: "Olá! Gostaria de saber como faço para me cadastrar como entregador na plataforma." },
+    { label: "Problema no pedido 📦", text: "Olá! Estou com um problema em um dos meus pedidos recentes e gostaria de suporte." },
+    { label: "Dúvida sobre taxas 💰", text: "Olá! Tenho uma dúvida sobre as taxas de entrega ou cupons de desconto." },
+    { label: "Falar com suporte 🙋‍♂️", text: "Olá! Gostaria de falar com um atendente humano para tirar uma dúvida geral." }
+  ];
 
   useEffect(() => {
     if (!user) return;
@@ -100,11 +107,12 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
     }
   }, [messages]);
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !user || !conversationId) return;
+  const handleSend = async (e?: React.FormEvent, customText?: string) => {
+    if (e) e.preventDefault();
+    const msgText = customText || newMessage.trim();
+    if (!msgText || !user || !conversationId || sending) return;
 
-    const msgText = newMessage.trim();
+    setSending(true);
     setNewMessage('');
 
     try {
@@ -123,6 +131,8 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
 
     } catch (err) {
       console.error("[SupportChat] Erro ao enviar:", err);
+    } finally {
+      setSending(false);
     }
   };
 
@@ -144,9 +154,26 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center opacity-50 px-8">
-            <UserIcon className="h-12 w-12 mb-4 text-muted-foreground/30" />
-            <p className="text-sm font-medium">Olá! Envie uma mensagem para iniciar seu atendimento ou inscrição.</p>
+          <div className="flex flex-col items-center justify-center h-full text-center py-6 px-4">
+            <div className="w-20 h-20 bg-primary/5 rounded-full flex items-center justify-center mb-6">
+              <UserIcon className="h-10 w-10 text-primary/30" />
+            </div>
+            <p className="text-sm font-black text-foreground mb-2">Inicie uma conversa</p>
+            <p className="text-xs text-muted-foreground mb-8 max-w-[240px]">
+              Escolha uma opção abaixo ou escreva sua dúvida para começarmos o atendimento.
+            </p>
+            
+            <div className="grid grid-cols-1 gap-2 w-full max-w-[280px]">
+              {QUICK_MESSAGES.map((msg, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSend(undefined, msg.text)}
+                  className="px-4 py-3 rounded-xl bg-card border border-border/50 text-[11px] font-bold text-foreground text-left hover:border-primary hover:bg-primary/5 active:scale-95 transition-all shadow-sm"
+                >
+                  {msg.label}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           messages.map(msg => {
@@ -172,8 +199,8 @@ export function SupportChat({ topic, title, companyId = null }: SupportChatProps
           placeholder="Escreva sua mensagem..."
           className="flex-1 rounded-full bg-background border-border/40 h-12 px-5"
         />
-        <Button disabled={!newMessage.trim() || !conversationId} type="submit" size="icon" className="rounded-full h-12 w-12 shrink-0 shadow-lg active:scale-95 transition-all">
-          <Send className="h-5 w-5" />
+        <Button disabled={!newMessage.trim() || !conversationId || sending} type="submit" size="icon" className="rounded-full h-12 w-12 shrink-0 shadow-lg active:scale-95 transition-all">
+          {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
         </Button>
       </form>
     </div>

@@ -246,13 +246,46 @@ export default function Checkout() {
         payload: requestBody,
       });
 
-      const { data, error: fnError } = await supabase.functions.invoke('create-order', {
-        body: requestBody,
+      // Tenta criar via RPC primeiro (mais estável que Edge Function para DB ops)
+      const { data, error: rpcError } = await supabase.rpc('create_order_v3', {
+        p_items: items.map((it) => ({
+          product_id: it.product.id,
+          quantity: it.quantity,
+          notes: it.note || null,
+          options: it.options || [],
+        })),
+        p_company_id: company.id,
+        p_address_id: selectedAddress,
+        p_payment_method: paymentMethod,
+        p_coupon_code: appliedCoupon?.code ?? null,
+        p_notes: orderNotes,
+        p_needs_change: paymentMethod === 'money' && needsChange,
+        p_change_for: changeFor ? Number(changeFor) : null,
+        p_idempotency_key: ik,
+        p_delivery_fee: deliveryFee || 0,
+        p_region_id: regionId,
+        p_total: total,
+        p_subtotal: subtotal,
+        p_discount: discountAmount
       });
 
-      if (fnError || !data?.order_id) {
+      let finalData = data;
+      let finalError = rpcError;
+
+      // Fallback para Edge Function se RPC falhar por não existir
+      if (rpcError || (data as any)?.error) {
+        console.warn('RPC create_order_v3 failed, trying edge function fallback...', rpcError || (data as any)?.error);
+        
+        const { data: fnData, error: fnError } = await supabase.functions.invoke('create-order', {
+          body: requestBody,
+        });
+        finalData = fnData;
+        finalError = fnError;
+      }
+
+      if (finalError || (finalData as any)?.error || !finalData?.order_id) {
         const rawMsg =
-          (data as any)?.error || (fnError as any)?.context?.error || fnError?.message || 'Erro ao criar pedido';
+          (finalData as any)?.error || (finalError as any)?.context?.error || finalError?.message || 'Erro ao criar pedido';
         const friendly = mapServerError(String(rawMsg));
         void recordAuditLog({
           request_id: requestId,
@@ -269,17 +302,17 @@ export default function Checkout() {
         request_id: requestId,
         event: 'orders.insert.success',
         user_id: user.id,
-        context: { order_id: data.order_id, idempotent: !!data.idempotent },
+        context: { order_id: finalData.order_id, idempotent: !!finalData.idempotent },
       });
 
       clearCart();
       resetIdempotencyKey();
-      if (data.idempotent) {
+      if (finalData.idempotent) {
         toast.info('Esse pedido já foi criado. Abrimos os detalhes para você.');
       } else {
         toast.success('Pedido realizado!');
       }
-      navigate(`/marketplace/orders/${data.order_id}`);
+      navigate(`/marketplace/orders/${finalData.order_id}`);
     } catch (err: any) {
       toast.error(err.message || 'Erro ao criar pedido');
     } finally { setLoading(false); releaseLock(); }
@@ -341,12 +374,6 @@ export default function Checkout() {
             <div className="flex items-center gap-2 p-3 rounded-xl bg-primary/5 text-primary text-sm">
               <Loader2 className="h-4 w-4 animate-spin shrink-0" />
               <span>Calculando frete da região...</span>
-            </div>
-          )}
-          {regionName && !loadingFee && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/5 text-primary text-xs font-semibold">
-              <MapPin className="h-3.5 w-3.5" />
-              {regionName}
             </div>
           )}
         </div>

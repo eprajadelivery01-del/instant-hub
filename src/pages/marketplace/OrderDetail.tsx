@@ -322,7 +322,30 @@ export default function OrderDetail() {
             {showChat && (
               <div className="mt-3">
                 <div className="h-44 overflow-y-auto space-y-2 mb-3 p-3 border border-border rounded-xl bg-secondary/30">
-                  {messages.length === 0 && <p className="text-sm text-muted-foreground text-center py-6">Nenhuma mensagem</p>}
+                  {messages.length === 0 && (
+                    <div className="flex flex-col gap-2 py-2">
+                      {[
+                        { label: "Onde você está? 📍", text: "Olá! Onde você está no momento?" },
+                        { label: "Deixei o portão aberto 🚪", text: "Olá! O portão está aberto, pode entrar." },
+                        { label: "Vou descer 🏃‍♂️", text: "Olá! Já estou descendo para receber o pedido." }
+                      ].map((m, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            setNewMessage(m.text);
+                            // Usamos um pequeno timeout para garantir que o estado seja atualizado antes do envio
+                            setTimeout(() => {
+                              const btn = document.getElementById('btn-send-driver');
+                              if (btn) btn.click();
+                            }, 50);
+                          }}
+                          className="px-3 py-2 rounded-lg bg-card border border-border/50 text-[10px] font-bold text-foreground text-left hover:border-primary hover:bg-primary/5 active:scale-95 transition-all"
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {messages.map(msg => (
                     <div key={msg.id} className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}>
                       <div className={`rounded-2xl px-3 py-2 max-w-[80%] text-sm ${
@@ -338,7 +361,7 @@ export default function OrderDetail() {
                 </div>
                 <div className="flex gap-2">
                   <Input value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." className="rounded-xl h-10" onKeyDown={e => e.key === 'Enter' && sendMessage()} />
-                  <Button size="icon" className="rounded-xl h-10 w-10 shrink-0" onClick={sendMessage}>
+                  <Button id="btn-send-driver" size="icon" className="rounded-xl h-10 w-10 shrink-0" onClick={sendMessage}>
                     <Send className="h-4 w-4" />
                   </Button>
                 </div>

@@ -33,6 +33,12 @@ export function OrderStoreChat({ orderId, companyId, companyName }: OrderStoreCh
   const endRef = useRef<HTMLDivElement>(null);
   const topic = `order_${orderId}`;
 
+  const QUICK_MESSAGES = [
+    { label: "Onde está o pedido? ⏳", text: "Olá! Poderia me informar a previsão de entrega do meu pedido?" },
+    { label: "Mudar endereço 📍", text: "Olá! Preciso alterar ou detalhar melhor meu endereço de entrega. Como faço?" },
+    { label: "Falar com atendente 👤", text: "Olá! Gostaria de falar com alguém sobre um detalhe do meu pedido." }
+  ];
+
   useEffect(() => {
     if (!user) return;
     let active = true;
@@ -88,10 +94,10 @@ export function OrderStoreChat({ orderId, companyId, companyName }: OrderStoreCh
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const send = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim() || !sessionId || !user || sending) return;
-    const msg = text.trim();
+  const send = async (e?: React.FormEvent, customText?: string) => {
+    if (e) e.preventDefault();
+    const msg = (customText || text).trim();
+    if (!msg || !sessionId || !user || sending) return;
     setText('');
     setSending(true);
     await supabase.from('chat_message_logs').insert({
@@ -114,9 +120,22 @@ export function OrderStoreChat({ orderId, companyId, companyName }: OrderStoreCh
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
           </div>
         ) : messages.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-6">
-            Envie uma mensagem para o lojista se precisar de algo.
-          </p>
+          <div className="flex flex-col items-center justify-center h-full text-center py-4 px-2">
+            <p className="text-[10px] font-bold text-muted-foreground/50 mb-4 uppercase tracking-widest">
+              Opções rápidas
+            </p>
+            <div className="grid grid-cols-1 gap-1.5 w-full">
+              {QUICK_MESSAGES.map((m, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => send(undefined, m.text)}
+                  className="px-3 py-2.5 rounded-lg bg-card border border-border/50 text-[10px] font-bold text-foreground text-left hover:border-primary hover:bg-primary/5 active:scale-95 transition-all"
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : (
           messages.map((m) => {
             const isMe = m.sender_id === user?.id;
