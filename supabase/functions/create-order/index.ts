@@ -8,7 +8,8 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
     'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS, GET, PUT, DELETE',
+  'Access-Control-Max-Age': '86400',
 };
 
 interface CartItemInput {
@@ -50,7 +51,9 @@ function newRequestId() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -237,11 +240,11 @@ Deno.serve(async (req) => {
   } else if (address.latitude && address.longitude) {
     const { data: regions } = await adminClient
       .from('regions')
-      .select('id, name, fee, polygon');
+      .select('id, name, price, delivery_fee, geometry');
     if (regions && regions.length > 0) {
       const inside = pickRegion(regions, Number(address.latitude), Number(address.longitude));
       if (inside) {
-        deliveryFee = Number(inside.fee) || 0;
+        deliveryFee = Number(inside.price ?? inside.delivery_fee ?? 0);
         regionId = inside.id;
         regionName = inside.name;
       } else {
@@ -312,6 +315,9 @@ Deno.serve(async (req) => {
       payment_method: body.payment_method,
       notes: finalNotes,
       idempotency_key: body.idempotency_key,
+      region_id: regionId,
+      delivery_latitude: address.latitude,
+      delivery_longitude: address.longitude,
     })
     .select('id')
     .single();
@@ -373,6 +379,7 @@ Deno.serve(async (req) => {
     status: 'pending',
     value: total,
     price: deliveryFee,
+    region_id: regionId,
   });
 
   await audit(
@@ -408,7 +415,7 @@ Deno.serve(async (req) => {
 // ou array de {lat,lng}.
 function pickRegion(regions: any[], lat: number, lng: number) {
   for (const r of regions) {
-    const poly = normalizePolygon(r.polygon);
+    const poly = normalizePolygon(r.geometry);
     if (poly && pointInPolygon(lng, lat, poly)) return r;
   }
   return null;
