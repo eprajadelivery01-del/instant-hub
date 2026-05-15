@@ -251,9 +251,7 @@ export default function MarketplaceLayout({ children, hideNav }: { children: Rea
       )}>
         <div className="flex-1 w-full max-w-7xl mx-auto">{children}</div>
 
-        <footer className="mt-auto flex w-full flex-col items-center justify-center py-8 border-t border-border/10 bg-white">
-          <p className="text-[10px] font-black uppercase tracking-[0.5em] text-muted-foreground/30">BONASOFT</p>
-        </footer>
+
       </main>
 
       {!hideNav && (

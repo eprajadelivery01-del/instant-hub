@@ -361,6 +361,9 @@ export default function Home() {
           </div>
         </SheetContent>
       </Sheet>
-    </MarketplaceLayout>
+        <div className="mt-16 text-center">
+          <p className="text-[11px] font-black uppercase tracking-[0.6em] text-muted-foreground/30 ml-2">BONASOFT</p>
+        </div>
+      </MarketplaceLayout>
   );
 }
