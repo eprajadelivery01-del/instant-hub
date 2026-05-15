@@ -34,7 +34,7 @@ function mapServerError(msg: string): string {
 export default function Checkout() {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
-  const { items, company, notes: itemNotes, subtotal, clearCart } = useCart();
+  const { items, company, subtotal, clearCart } = useCart();
   const { isLocked, acquireLock, releaseLock, generateIdempotencyKey, resetIdempotencyKey } = useOrderLock();
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<string>('');
@@ -210,8 +210,8 @@ export default function Checkout() {
       }
 
       const requestId = newRequestId();
-      const orderNotes = Object.values(itemNotes)
-        .map((note) => note.trim())
+      const orderNotes = items
+        .map((it) => it.note?.trim())
         .filter(Boolean)
         .join(' • ') || null;
 
@@ -246,73 +246,46 @@ export default function Checkout() {
         payload: requestBody,
       });
 
-      // Tenta criar via RPC primeiro (mais estável que Edge Function para DB ops)
+      // --- ALTERAÇÃO: USANDO RPC create_order_v3 PARA MAIOR CONFIABILIDADE ---
       const { data, error: rpcError } = await supabase.rpc('create_order_v3', {
-        p_items: items.map((it) => ({
-          product_id: it.product.id,
-          quantity: it.quantity,
-          notes: it.note || null,
-          options: it.options || [],
-        })),
-        p_company_id: company.id,
-        p_address_id: selectedAddress,
-        p_payment_method: paymentMethod,
-        p_coupon_code: appliedCoupon?.code ?? null,
-        p_notes: orderNotes,
-        p_needs_change: paymentMethod === 'money' && needsChange,
-        p_change_for: changeFor ? Number(changeFor) : null,
-        p_idempotency_key: ik,
-        p_delivery_fee: deliveryFee || 0,
-        p_region_id: regionId,
-        p_total: total,
-        p_subtotal: subtotal,
-        p_discount: discountAmount
+        p_items: requestBody.items,
+        p_company_id: requestBody.company_id,
+        p_address_id: requestBody.address_id,
+        p_payment_method: requestBody.payment_method,
+        p_coupon_code: requestBody.coupon_code,
+        p_notes: requestBody.notes,
+        p_needs_change: requestBody.needs_change,
+        p_change_for: requestBody.change_for,
+        p_idempotency_key: requestBody.idempotency_key
       });
 
-      let finalData = data;
-      let finalError = rpcError;
-
-      // Fallback para Edge Function se RPC falhar por não existir
-      if (rpcError || (data as any)?.error) {
-        console.warn('RPC create_order_v3 failed, trying edge function fallback...', rpcError || (data as any)?.error);
-        
-        const { data: fnData, error: fnError } = await supabase.functions.invoke('create-order', {
-          body: requestBody,
-        });
-        finalData = fnData;
-        finalError = fnError;
-      }
-
-      if (finalError || (finalData as any)?.error || !finalData?.order_id) {
-        const rawMsg =
-          (finalData as any)?.error || (finalError as any)?.context?.error || finalError?.message || 'Erro ao criar pedido';
-        const friendly = mapServerError(String(rawMsg));
+      if (rpcError) {
+        const friendly = mapServerError(rpcError.message);
         void recordAuditLog({
           request_id: requestId,
           event: 'orders.insert.error',
           user_id: user.id,
-          error_message: rawMsg,
+          error_message: rpcError.message,
           payload: requestBody,
           context: { friendly },
         });
         throw new Error(friendly);
       }
 
+      const orderId = data?.order_id || data; // Dependendo de como o RPC retorna
+      if (!orderId) throw new Error('Falha ao obter ID do pedido.');
+
       void recordAuditLog({
         request_id: requestId,
         event: 'orders.insert.success',
         user_id: user.id,
-        context: { order_id: finalData.order_id, idempotent: !!finalData.idempotent },
+        context: { order_id: orderId },
       });
 
       clearCart();
       resetIdempotencyKey();
-      if (finalData.idempotent) {
-        toast.info('Esse pedido já foi criado. Abrimos os detalhes para você.');
-      } else {
-        toast.success('Pedido realizado!');
-      }
-      navigate(`/marketplace/orders/${finalData.order_id}`);
+      toast.success('Pedido realizado!');
+      navigate(`/marketplace/orders/${orderId}`);
     } catch (err: any) {
       toast.error(err.message || 'Erro ao criar pedido');
     } finally { setLoading(false); releaseLock(); }
@@ -374,6 +347,12 @@ export default function Checkout() {
             <div className="flex items-center gap-2 p-3 rounded-xl bg-primary/5 text-primary text-sm">
               <Loader2 className="h-4 w-4 animate-spin shrink-0" />
               <span>Calculando frete da região...</span>
+            </div>
+          )}
+          {regionName && !loadingFee && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/5 text-primary text-xs font-semibold">
+              <MapPin className="h-3.5 w-3.5" />
+              {regionName}
             </div>
           )}
         </div>
@@ -508,6 +487,10 @@ export default function Checkout() {
             </div>
           </div>
         </div>
+      </div>
+      
+      <div className="mt-16 mb-24 text-center">
+        <p className="text-[11px] font-black uppercase tracking-[0.6em] text-muted-foreground/30 ml-2">BONASOFT</p>
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur-lg p-4 safe-area-bottom">
